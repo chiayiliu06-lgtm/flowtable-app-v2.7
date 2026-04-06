@@ -1,0 +1,1401 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flow Table Manager</title>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<style>
+/* ========== MORANDI PALETTE ========== */
+:root {
+  --bg-primary: #1a1f2e;
+  --bg-secondary: #232838;
+  --bg-card: #2a3042;
+  --bg-card-hover: #323850;
+  --accent: #6B9080;
+  --accent-dim: rgba(107,144,128,0.15);
+  --accent-hover: #7BA892;
+  --text-primary: #E8E0D8;
+  --text-secondary: #9B9590;
+  --danger: #C17B7B;
+  --warning: #D4A76A;
+  --success: #6B9080;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --transition: 0.3s ease;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+a { color: var(--accent); }
+
+/* Header */
+.app-header {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  background: rgba(26,31,46,0.85);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(107,144,128,0.1);
+  padding: 12px 24px;
+}
+.header-inner {
+  max-width: 1200px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
+.app-logo {
+  font-size: 1.25rem; font-weight: 700; letter-spacing: -0.5px;
+  display: flex; align-items: center; gap: 8px; white-space: nowrap;
+}
+.app-logo span { color: var(--accent); }
+
+/* Stepper */
+.stepper { display: flex; align-items: center; gap: 0; }
+.step { display: flex; align-items: center; gap: 0; }
+.step-circle {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 2px solid var(--text-secondary);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+  transition: all var(--transition); cursor: pointer; flex-shrink: 0;
+}
+.step-circle:hover { border-color: var(--accent); color: var(--accent); }
+.step.active .step-circle,
+.step.done .step-circle {
+  border-color: var(--accent); background: var(--accent); color: var(--bg-primary);
+}
+.step.done .step-circle { background: var(--accent); opacity: 0.7; }
+.step-line {
+  width: 28px; height: 2px; background: var(--text-secondary); transition: background var(--transition);
+}
+.step.done + .step .step-line,
+.step.done .step-line { background: var(--accent); }
+
+/* Main */
+.main-content {
+  max-width: 1200px; margin: 0 auto;
+  padding: 90px 24px 100px;
+}
+.phase-section { display: none; animation: fadeIn 0.4s ease; }
+.phase-section.active { display: block; }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Cards */
+.card {
+  background: var(--bg-card); border-radius: var(--radius);
+  padding: 24px; border: 1px solid rgba(255,255,255,0.05);
+  transition: border-color var(--transition);
+}
+.card:hover { border-color: rgba(107,144,128,0.15); }
+.card-title {
+  font-size: 1.1rem; font-weight: 600; margin-bottom: 16px;
+  display: flex; align-items: center; gap: 8px;
+}
+.card-title .icon { color: var(--accent); font-size: 1.2rem; }
+
+/* Phase title */
+.phase-title { font-size: 1.6rem; font-weight: 700; margin-bottom: 8px; }
+.phase-subtitle { color: var(--text-secondary); margin-bottom: 24px; font-size: 0.95rem; }
+
+/* Form */
+.form-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px;
+}
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group label { font-size: 0.85rem; color: var(--text-secondary); font-weight: 500; }
+.form-group input,
+.form-group select {
+  background: var(--bg-secondary); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius-sm); padding: 10px 14px;
+  color: var(--text-primary); font-size: 0.95rem;
+  transition: border-color var(--transition); outline: none;
+}
+.form-group input:focus,
+.form-group select:focus { border-color: var(--accent); }
+.form-group select option { background: var(--bg-secondary); }
+
+/* Module tags */
+.module-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.module-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 20px; font-size: 0.82rem; font-weight: 500;
+  background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(107,144,128,0.2);
+}
+.module-tag .qty { opacity: 0.7; }
+
+/* Power */
+.power-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 16px;
+}
+.power-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.power-row:last-child { border-bottom: none; }
+.power-bar-container {
+  height: 8px; background: var(--bg-secondary); border-radius: 4px;
+  margin-top: 6px; overflow: hidden;
+}
+.power-bar { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
+.stat-value { font-size: 1.8rem; font-weight: 700; color: var(--accent); }
+.stat-label { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; }
+
+/* 3D */
+#three-container {
+  width: 100%; height: 500px; border-radius: var(--radius);
+  overflow: hidden; position: relative; background: var(--bg-secondary);
+}
+#three-container canvas { display: block; }
+.three-legend {
+  position: absolute; top: 12px; right: 12px; background: rgba(26,31,46,0.85);
+  backdrop-filter: blur(8px); border-radius: var(--radius-sm); padding: 12px 16px;
+  font-size: 0.78rem; display: flex; flex-direction: column; gap: 6px;
+}
+.legend-item { display: flex; align-items: center; gap: 8px; }
+.legend-color { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.three-hint {
+  position: absolute; bottom: 12px; left: 12px;
+  background: rgba(26,31,46,0.7); border-radius: 6px; padding: 6px 12px;
+  font-size: 0.75rem; color: var(--text-secondary);
+}
+
+/* Gauges */
+.gauge-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;
+}
+.gauge-card {
+  background: var(--bg-card); border-radius: var(--radius); padding: 24px;
+  text-align: center; border: 1px solid rgba(255,255,255,0.05);
+  transition: border-color var(--transition);
+}
+.gauge-card.warning { border-color: var(--warning); }
+.gauge-card.danger { border-color: var(--danger); }
+.gauge-svg { width: 140px; height: 140px; margin: 0 auto; }
+.gauge-bg { fill: none; stroke: var(--bg-secondary); stroke-width: 10; }
+.gauge-fill {
+  fill: none; stroke-width: 10; stroke-linecap: round;
+  transition: stroke-dashoffset 0.8s ease, stroke 0.3s ease;
+}
+.gauge-value { font-size: 2rem; font-weight: 700; margin-top: 8px; }
+.gauge-label { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; }
+.gauge-unit { font-size: 0.9rem; color: var(--text-secondary); font-weight: 400; }
+
+/* Alert bar */
+.alert-bar {
+  padding: 12px 20px; border-radius: var(--radius-sm); margin-bottom: 16px;
+  font-weight: 600; font-size: 0.9rem; display: none; align-items: center; gap: 10px;
+}
+.alert-bar.show { display: flex; }
+.alert-bar.warning-alert { background: rgba(212,167,106,0.15); color: var(--warning); border: 1px solid rgba(212,167,106,0.3); }
+.alert-bar.danger-alert { background: rgba(193,123,123,0.15); color: var(--danger); border: 1px solid rgba(193,123,123,0.3); }
+
+/* Fan / Lighting indicators */
+.fan-indicator {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 20px; background: var(--bg-card); border-radius: var(--radius-sm);
+  margin-top: 16px; font-size: 0.9rem;
+}
+.fan-speed-bar {
+  flex: 1; height: 8px; background: var(--bg-secondary); border-radius: 4px; overflow: hidden;
+}
+.fan-speed-fill {
+  height: 100%; background: var(--accent); border-radius: 4px;
+  transition: width 0.5s ease, background 0.3s ease;
+}
+.lighting-slider {
+  width: 100%; accent-color: var(--accent); cursor: pointer;
+}
+
+/* IoT buttons */
+.iot-controls { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px 22px; border-radius: var(--radius-sm); border: none;
+  font-size: 0.9rem; font-weight: 600; cursor: pointer;
+  transition: all var(--transition); outline: none;
+}
+.btn-primary { background: var(--accent); color: var(--bg-primary); }
+.btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+.btn-secondary {
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+.btn-danger { background: rgba(193,123,123,0.15); color: var(--danger); border: 1px solid rgba(193,123,123,0.3); }
+.btn-danger:hover { background: rgba(193,123,123,0.25); }
+.btn-warning { background: rgba(212,167,106,0.15); color: var(--warning); border: 1px solid rgba(212,167,106,0.3); }
+
+/* Navigation footer */
+.nav-footer {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: rgba(26,31,46,0.9); backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(107,144,128,0.1); padding: 12px 24px; z-index: 100;
+}
+.nav-inner {
+  max-width: 1200px; margin: 0 auto;
+  display: flex; justify-content: space-between; align-items: center;
+}
+
+/* ESG tags */
+.esg-tags { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.esg-tag { padding: 8px 16px; border-radius: 20px; font-size: 0.82rem; font-weight: 600; }
+.esg-tag.env { background: rgba(107,144,128,0.15); color: var(--success); border: 1px solid rgba(107,144,128,0.3); }
+.esg-tag.social { background: rgba(139,159,191,0.15); color: #8B9FBF; border: 1px solid rgba(139,159,191,0.3); }
+.esg-tag.gov { background: rgba(166,143,186,0.15); color: #A68FBA; border: 1px solid rgba(166,143,186,0.3); }
+
+/* Report grid */
+.report-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px;
+}
+.report-stat {
+  background: var(--bg-card); border-radius: var(--radius); padding: 20px;
+  text-align: center; border: 1px solid rgba(255,255,255,0.05);
+}
+
+/* Elapsed timer */
+.elapsed-timer { font-size: 0.85rem; color: var(--text-secondary); text-align: center; margin-top: 12px; }
+
+/* Spatial scan */
+.scan-container {
+  position: relative; width: 100%; max-width: 480px; margin: 0 auto;
+  border-radius: var(--radius-sm); overflow: hidden; background: #000;
+}
+.scan-container video { width: 100%; display: block; }
+.scan-container canvas {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+}
+.scan-results { margin-top: 12px; }
+.scan-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: 12px; font-size: 0.8rem; margin: 3px;
+  background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(107,144,128,0.2);
+}
+
+/* History chart */
+#historyChart {
+  width: 100%; height: 220px; border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+/* Chart legend */
+.chart-legend {
+  display: flex; gap: 16px; justify-content: center; margin-top: 8px; font-size: 0.8rem;
+}
+.chart-legend-item { display: flex; align-items: center; gap: 5px; }
+.chart-legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .header-inner { flex-direction: column; gap: 10px; }
+  .stepper { transform: scale(0.85); }
+  .main-content { padding: 130px 16px 100px; }
+  #three-container { height: 350px; }
+  .phase-title { font-size: 1.3rem; }
+  .stat-value { font-size: 1.4rem; }
+  .gauge-svg { width: 110px; height: 110px; }
+  .gauge-value { font-size: 1.5rem; }
+  #historyChart { height: 160px; }
+}
+@media (max-width: 480px) {
+  .form-grid { grid-template-columns: 1fr; }
+  .gauge-grid { grid-template-columns: 1fr; }
+  .step-line { width: 16px; }
+  .step-circle { width: 28px; height: 28px; font-size: 0.72rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="app-header">
+  <div class="header-inner">
+    <div class="app-logo">&#9632; Flow <span>Table</span> Manager</div>
+    <div class="stepper" id="stepper">
+      <div class="step active" data-step="1"><span class="step-circle" onclick="PhaseNav.goTo(1)">1</span></div><div class="step-line"></div>
+      <div class="step" data-step="2"><span class="step-circle" onclick="PhaseNav.goTo(2)">2</span></div><div class="step-line"></div>
+      <div class="step" data-step="3"><span class="step-circle" onclick="PhaseNav.goTo(3)">3</span></div><div class="step-line"></div>
+      <div class="step" data-step="4"><span class="step-circle" onclick="PhaseNav.goTo(4)">4</span></div><div class="step-line"></div>
+      <div class="step" data-step="5"><span class="step-circle" onclick="PhaseNav.goTo(5)">5</span></div>
+    </div>
+  </div>
+</header>
+
+<!-- Main Content -->
+<main class="main-content">
+
+  <!-- ==================== PHASE 1 ==================== -->
+  <section class="phase-section active" id="phase-1">
+    <h2 class="phase-title">Phase 1: Venue & Parameter Input</h2>
+    <p class="phase-subtitle">Set up your event details. Modules will be auto-selected based on your configuration.</p>
+
+    <div class="card">
+      <div class="card-title"><span class="icon">&#9881;</span> Event Configuration</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Event Type</label>
+          <select id="eventType">
+            <option value="">-- Select --</option>
+            <option value="health_clinic">Health Clinic (&#20581;&#24247;&#35386;&#25152;)</option>
+            <option value="elderly_dining">Elderly Dining (&#38263;&#32773;&#20849;&#39184;)</option>
+            <option value="outdoor_market">Outdoor Market (&#25142;&#22806;&#24066;&#38598;)</option>
+            <option value="workshop">Workshop (&#24037;&#20316;&#22346;)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Expected Number of People</label>
+          <input type="number" id="peopleCount" min="1" max="200" placeholder="e.g. 20">
+        </div>
+        <div class="form-group">
+          <label>Duration (hours)</label>
+          <input type="number" id="duration" min="0.5" max="24" step="0.5" placeholder="e.g. 3">
+        </div>
+        <div class="form-group">
+          <label>Venue Width (m)</label>
+          <input type="number" id="venueWidth" min="2" max="100" step="0.1" placeholder="e.g. 8">
+        </div>
+        <div class="form-group">
+          <label>Venue Length (m)</label>
+          <input type="number" id="venueLength" min="2" max="100" step="0.1" placeholder="e.g. 10">
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-title"><span class="icon">&#9645;</span> Auto-Selected Modules</div>
+      <div class="module-tags" id="moduleTags">
+        <span style="color:var(--text-secondary); font-size:0.9rem">Fill in the form above to see recommended modules.</span>
+      </div>
+    </div>
+
+    <!-- AI Spatial Scan -->
+    <div class="card" style="margin-top:16px" id="spatialScanCard">
+      <div class="card-title"><span class="icon">&#128247;</span> AI Spatial Scan (Optional)</div>
+      <p style="color:var(--text-secondary);font-size:0.88rem;margin-bottom:14px">
+        Point your camera at the venue. Hold the button to detect furniture and estimate capacity.
+      </p>
+      <div class="scan-container" id="scanContainer" style="display:none">
+        <video id="scanVideo" autoplay playsinline muted></video>
+        <canvas id="scanCanvas"></canvas>
+      </div>
+      <div style="text-align:center;margin-top:12px">
+        <button class="btn btn-primary" id="btnScan"
+          onmousedown="Phase1.startScan()" onmouseup="Phase1.stopScan()"
+          ontouchstart="Phase1.startScan()" ontouchend="Phase1.stopScan()"
+          style="touch-action:none">
+          &#128270; Hold to Scan
+        </button>
+        <span id="scanStatus" style="margin-left:10px;font-size:0.85rem;color:var(--text-secondary)"></span>
+      </div>
+      <div class="scan-results" id="scanResults" style="display:none">
+        <div style="font-weight:600;margin-bottom:6px">Detected Objects:</div>
+        <div id="scanDetections"></div>
+        <button class="btn btn-secondary" style="margin-top:10px" id="btnApplyScan" onclick="Phase1.applyScanResults()">
+          Apply Estimated Capacity
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== PHASE 2 ==================== -->
+  <section class="phase-section" id="phase-2">
+    <h2 class="phase-title">Phase 2: Power & Circuit Planning</h2>
+    <p class="phase-subtitle">Review the power budget and battery requirements for your setup.</p>
+    <div class="power-grid" id="powerGrid"></div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-title"><span class="icon">&#9889;</span> Power Breakdown</div>
+      <div id="powerBreakdown"></div>
+    </div>
+  </section>
+
+  <!-- ==================== PHASE 3 ==================== -->
+  <section class="phase-section" id="phase-3">
+    <h2 class="phase-title">Phase 3: AI Spatial Planning & 3D Layout</h2>
+    <p class="phase-subtitle">Review the auto-generated module placement. Rotate and zoom to inspect.</p>
+    <div id="three-container">
+      <div class="three-legend" id="threeLegend"></div>
+      <div class="three-hint">Drag to rotate / Scroll to zoom / Right-drag to pan</div>
+    </div>
+  </section>
+
+  <!-- ==================== PHASE 4 ==================== -->
+  <section class="phase-section" id="phase-4">
+    <h2 class="phase-title">Phase 4: Live IoT Monitoring</h2>
+    <p class="phase-subtitle">Real-time air quality monitoring with dynamic adjustment suggestions.</p>
+    <div class="alert-bar" id="alertBar"></div>
+    <div class="iot-controls">
+      <button class="btn btn-primary" id="btnSerial" onclick="Phase4.connectSerial()">&#9889; Connect Arduino (SCD41)</button>
+      <button class="btn btn-secondary" id="btnSim" onclick="Phase4.toggleSimulation()">&#9654; Start Simulation</button>
+      <button class="btn btn-danger" id="btnEndEvent" onclick="Phase4.endEvent()" style="margin-left:auto">&#9632; End Event</button>
+    </div>
+    <div class="gauge-grid">
+      <div class="gauge-card" id="gaugeCO2Card">
+        <svg class="gauge-svg" viewBox="0 0 120 120">
+          <circle class="gauge-bg" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke-dasharray="235.6 78.5"/>
+          <circle class="gauge-fill" id="gaugeCO2" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke="var(--accent)" stroke-dasharray="235.6 78.5" stroke-dashoffset="235.6"/>
+        </svg>
+        <div class="gauge-value" id="valCO2">--<span class="gauge-unit"> ppm</span></div>
+        <div class="gauge-label">CO2 Concentration</div>
+      </div>
+      <div class="gauge-card" id="gaugeTempCard">
+        <svg class="gauge-svg" viewBox="0 0 120 120">
+          <circle class="gauge-bg" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke-dasharray="235.6 78.5"/>
+          <circle class="gauge-fill" id="gaugeTemp" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke="var(--accent)" stroke-dasharray="235.6 78.5" stroke-dashoffset="235.6"/>
+        </svg>
+        <div class="gauge-value" id="valTemp">--<span class="gauge-unit"> &deg;C</span></div>
+        <div class="gauge-label">Temperature</div>
+      </div>
+      <div class="gauge-card" id="gaugePM25Card">
+        <svg class="gauge-svg" viewBox="0 0 120 120">
+          <circle class="gauge-bg" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke-dasharray="235.6 78.5"/>
+          <circle class="gauge-fill" id="gaugePM25" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke="var(--accent)" stroke-dasharray="235.6 78.5" stroke-dashoffset="235.6"/>
+        </svg>
+        <div class="gauge-value" id="valPM25">--<span class="gauge-unit"> &mu;g/m&sup3;</span></div>
+        <div class="gauge-label">PM2.5</div>
+      </div>
+    </div>
+
+    <!-- Fan indicator -->
+    <div class="fan-indicator">
+      <span>Fan Speed:</span>
+      <div class="fan-speed-bar"><div class="fan-speed-fill" id="fanSpeedFill" style="width:30%"></div></div>
+      <span id="fanSpeedLabel">30%</span>
+    </div>
+
+    <!-- Lighting dimmer (conditionally shown) -->
+    <div class="fan-indicator" id="lightingIndicator" style="display:none">
+      <span>&#128161; Lighting:</span>
+      <input type="range" class="lighting-slider" min="0" max="100" value="80"
+        oninput="Phase4.setLightingBrightness(this.value)">
+      <span id="lightingPctLabel">80%</span>
+      <span id="lightingWattLabel" style="color:var(--text-secondary);font-size:0.82rem">(20.0W)</span>
+    </div>
+
+    <div class="elapsed-timer" id="elapsedTimer">Elapsed: 00:00:00</div>
+
+    <!-- Real-time chart -->
+    <div class="card" style="margin-top:16px">
+      <div class="card-title"><span class="icon">&#128200;</span> Sensor History (last 60 readings)</div>
+      <canvas id="historyChart"></canvas>
+      <div class="chart-legend">
+        <div class="chart-legend-item"><div class="chart-legend-dot" style="background:#6B9080"></div>CO2 <span id="chartValCO2" style="color:var(--accent)"></span></div>
+        <div class="chart-legend-item"><div class="chart-legend-dot" style="background:#D4A76A"></div>Temp <span id="chartValTemp" style="color:var(--warning)"></span></div>
+        <div class="chart-legend-item"><div class="chart-legend-dot" style="background:#C17B7B"></div>PM2.5 <span id="chartValPM25" style="color:var(--danger)"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== PHASE 5 ==================== -->
+  <section class="phase-section" id="phase-5">
+    <h2 class="phase-title">Phase 5: Post-Event ESG Report</h2>
+    <p class="phase-subtitle">Summary of event performance, environmental impact, and compliance.</p>
+    <div class="report-grid" id="reportGrid"></div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-title"><span class="icon">&#9733;</span> ESG Tags</div>
+      <div class="esg-tags" id="esgTags"></div>
+    </div>
+    <div style="margin-top:20px; text-align:center">
+      <button class="btn btn-primary" onclick="Phase5.downloadPDF()" style="padding:14px 36px; font-size:1rem">&#8681; Download PDF Report</button>
+    </div>
+  </section>
+
+</main>
+
+<!-- Nav Footer -->
+<footer class="nav-footer">
+  <div class="nav-inner">
+    <button class="btn btn-secondary" id="btnPrev" onclick="PhaseNav.prev()" style="visibility:hidden">&larr; Previous</button>
+    <span id="phaseIndicator" style="color:var(--text-secondary); font-size:0.85rem">Phase 1 / 5</span>
+    <button class="btn btn-primary" id="btnNext" onclick="PhaseNav.next()">Calculate Power &rarr;</button>
+  </div>
+</footer>
+
+<script>
+// ================================================================
+//  GLOBAL STATE
+// ================================================================
+const APP = {
+  currentPhase: 1,
+  config: { eventType: '', peopleCount: 0, duration: 0, venueWidth: 0, venueLength: 0 },
+  selectedModules: [],
+  power: { totalWatts: 0, totalWh: 0, netWh: 0, solarOffsetWh: 0, batteryType: '', batteryCount: 0, breakdown: [] },
+  monitoring: {
+    active: false, mode: null, serialPort: null, serialReader: null,
+    simInterval: null, startTime: null, timerInterval: null,
+    history: { co2: [], temp: [], pm25: [], timestamps: [] },
+    fanSpeed: 30,
+    lightingBrightness: 80
+  },
+  three: { renderer: null, scene: null, camera: null, controls: null, animId: null },
+  spatialScan: { model: null, stream: null, scanning: false, detections: {}, scanInterval: null, frameCount: 0 },
+  spatialMap: null
+};
+
+// ================================================================
+//  MODULE CATALOG (Morandi colors)
+// ================================================================
+const MODULES = {
+  base_table:     { name: 'Base Table',          watts: 0,   color: '#7B9EAE', threeColor: 0x7B9EAE, w: 1.2, d: 0.8, h: 0.75 },
+  fan:            { name: 'Fan Module',           watts: 30,  color: '#6B9080', threeColor: 0x6B9080, w: 0.3, d: 0.3, h: 0.15 },
+  air_purifier:   { name: 'Air Purifier',         watts: 30,  color: '#7BA892', threeColor: 0x7BA892, w: 0.4, d: 0.4, h: 0.4  },
+  display:        { name: 'Display Screen',       watts: 50,  color: '#8B9FBF', threeColor: 0x8B9FBF, w: 0.5, d: 0.08,h: 0.35 },
+  sensor_unit:    { name: 'Sensor Unit (SCD41)',  watts: 5,   color: '#D4A76A', threeColor: 0xD4A76A, w: 0.1, d: 0.1, h: 0.08 },
+  privacy_screen: { name: 'Privacy Partition',    watts: 0,   color: '#A68FBA', threeColor: 0xA68FBA, w: 1.2, d: 0.05,h: 1.4  },
+  solar_panel:    { name: 'Solar Panel',          watts: 0,   color: '#5A7A8F', threeColor: 0x5A7A8F, w: 0.8, d: 0.6, h: 0.04 },
+  small_battery:  { name: 'Small Battery 500Wh',  watts: 0,   color: '#C19A7B', threeColor: 0xC19A7B, w: 0.3, d: 0.3, h: 0.15, capacity: 500 },
+  large_battery:  { name: 'Large Battery 2000Wh', watts: 0,   color: '#B07B6B', threeColor: 0xB07B6B, w: 0.5, d: 0.4, h: 0.25, capacity: 2000 },
+  smart_lighting: { name: 'Smart Lighting',       watts: 25,  color: '#A8B89E', threeColor: 0xA8B89E, w: 0.2, d: 0.2, h: 0.3  }
+};
+
+const EVENT_MODULES = {
+  health_clinic:  ['base_table', 'air_purifier', 'privacy_screen', 'sensor_unit', 'display', 'smart_lighting'],
+  elderly_dining: ['base_table', 'fan', 'sensor_unit', 'display', 'smart_lighting'],
+  outdoor_market: ['base_table', 'solar_panel', 'fan', 'display'],
+  workshop:       ['base_table', 'display', 'sensor_unit', 'smart_lighting']
+};
+
+const NEXT_LABELS = ['Calculate Power \u2192', 'Generate 3D Layout \u2192', 'Start Monitoring \u2192', 'Generate Report \u2192', ''];
+
+// ================================================================
+//  PhaseNav — Navigation & Stepper
+// ================================================================
+const PhaseNav = {
+  goTo(n) {
+    if (n < 1 || n > 5) return;
+    if (n > APP.currentPhase) {
+      for (let i = APP.currentPhase; i < n; i++) {
+        if (!PhaseNav.validate(i)) return;
+      }
+    }
+    PhaseNav.exit(APP.currentPhase);
+    APP.currentPhase = n;
+    PhaseNav.enter(n);
+    PhaseNav.updateUI();
+  },
+  next() { PhaseNav.goTo(APP.currentPhase + 1); },
+  prev() { PhaseNav.goTo(APP.currentPhase - 1); },
+
+  validate(n) {
+    if (n === 1) {
+      const c = APP.config;
+      if (!c.eventType || !c.peopleCount || !c.duration || !c.venueWidth || !c.venueLength) {
+        alert('Please fill in all fields in Phase 1.'); return false;
+      }
+      return true;
+    }
+    if (n === 4) {
+      if (APP.monitoring.history.co2.length < 5) {
+        alert('Please collect at least 10 seconds of monitoring data before proceeding.'); return false;
+      }
+    }
+    return true;
+  },
+
+  exit(n) {
+    if (n === 3) Phase3.cleanupThree();
+    if (n === 4) Phase4.stopAllMonitoring();
+  },
+
+  enter(n) {
+    if (n === 2) Phase2.calculatePower();
+    if (n === 3) setTimeout(() => Phase3.initThreeScene(), 50);
+    if (n === 4) {
+      // Show/hide lighting slider based on selected modules
+      const hasLighting = APP.selectedModules.some(m => m.key === 'smart_lighting');
+      document.getElementById('lightingIndicator').style.display = hasLighting ? 'flex' : 'none';
+    }
+    if (n === 5) Phase5.generateReport();
+  },
+
+  updateUI() {
+    const n = APP.currentPhase;
+    document.querySelectorAll('.phase-section').forEach((s, i) => {
+      s.classList.toggle('active', i === n - 1);
+    });
+    document.querySelectorAll('.step').forEach((s, i) => {
+      s.classList.toggle('active', i === n - 1);
+      s.classList.toggle('done', i < n - 1);
+    });
+    document.getElementById('btnPrev').style.visibility = n === 1 ? 'hidden' : 'visible';
+    const btnNext = document.getElementById('btnNext');
+    btnNext.textContent = NEXT_LABELS[n - 1] || '';
+    btnNext.style.display = n === 5 ? 'none' : '';
+    document.getElementById('phaseIndicator').textContent = `Phase ${n} / 5`;
+  }
+};
+
+// ================================================================
+//  Phase1 — Venue Config + Module Selection + Spatial Scan
+// ================================================================
+const Phase1 = {
+  readConfig() {
+    APP.config.eventType = document.getElementById('eventType').value;
+    APP.config.peopleCount = parseInt(document.getElementById('peopleCount').value) || 0;
+    APP.config.duration = parseFloat(document.getElementById('duration').value) || 0;
+    APP.config.venueWidth = parseFloat(document.getElementById('venueWidth').value) || 0;
+    APP.config.venueLength = parseFloat(document.getElementById('venueLength').value) || 0;
+    Phase1.selectModules();
+  },
+
+  selectModules() {
+    const { eventType, peopleCount } = APP.config;
+    if (!eventType || !peopleCount) {
+      APP.selectedModules = [];
+      Phase1.renderModuleTags();
+      return;
+    }
+    const required = EVENT_MODULES[eventType] || [];
+    const tableCount = Math.max(1, Math.ceil(peopleCount / 4));
+    const sensorCount = Math.max(1, Math.ceil(tableCount / 2));
+    const modules = [];
+    for (const key of required) {
+      let qty = tableCount;
+      if (key === 'sensor_unit') qty = sensorCount;
+      if (key === 'privacy_screen') qty = tableCount;
+      if (key === 'smart_lighting') qty = tableCount;
+      modules.push({ key, ...MODULES[key], qty });
+    }
+    APP.selectedModules = modules;
+    Phase1.renderModuleTags();
+  },
+
+  renderModuleTags() {
+    const container = document.getElementById('moduleTags');
+    if (!APP.selectedModules.length) {
+      container.innerHTML = '<span style="color:var(--text-secondary);font-size:0.9rem">Fill in the form above to see recommended modules.</span>';
+      return;
+    }
+    container.innerHTML = APP.selectedModules.map(m =>
+      `<span class="module-tag"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${m.color}"></span>${m.name} <span class="qty">&times;${m.qty}</span></span>`
+    ).join('');
+  },
+
+  // --- Spatial Scan ---
+  async startScan() {
+    const status = document.getElementById('scanStatus');
+    const container = document.getElementById('scanContainer');
+    const video = document.getElementById('scanVideo');
+    const canvas = document.getElementById('scanCanvas');
+
+    // Load COCO-SSD model on first use
+    if (!APP.spatialScan.model) {
+      status.textContent = 'Loading AI model...';
+      try {
+        APP.spatialScan.model = await cocoSsd.load();
+        status.textContent = 'Model ready. Scanning...';
+      } catch (err) {
+        status.textContent = 'Failed to load model: ' + err.message;
+        console.error(err);
+        return;
+      }
+    }
+
+    // Start webcam
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }
+      });
+      APP.spatialScan.stream = stream;
+      video.srcObject = stream;
+      container.style.display = 'block';
+
+      await new Promise(r => video.onloadedmetadata = r);
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      APP.spatialScan.scanning = true;
+      APP.spatialScan.detections = {};
+      APP.spatialScan.frameCount = 0;
+      status.textContent = 'Scanning...';
+      document.getElementById('btnScan').textContent = '\u{1F50D} Scanning...';
+
+      APP.spatialScan.scanInterval = setInterval(async () => {
+        if (!APP.spatialScan.scanning) return;
+        try {
+          const predictions = await APP.spatialScan.model.detect(video);
+          Phase1._drawDetections(canvas, predictions);
+          APP.spatialScan.frameCount++;
+          for (const p of predictions) {
+            APP.spatialScan.detections[p.class] = (APP.spatialScan.detections[p.class] || 0) + 1;
+          }
+        } catch (e) { /* ignore frame errors */ }
+      }, 500);
+    } catch (err) {
+      status.textContent = 'Camera access denied.';
+      console.error(err);
+    }
+  },
+
+  stopScan() {
+    APP.spatialScan.scanning = false;
+    if (APP.spatialScan.scanInterval) clearInterval(APP.spatialScan.scanInterval);
+    if (APP.spatialScan.stream) {
+      APP.spatialScan.stream.getTracks().forEach(t => t.stop());
+      APP.spatialScan.stream = null;
+    }
+    document.getElementById('scanContainer').style.display = 'none';
+    document.getElementById('btnScan').textContent = '\u{1F50D} Hold to Scan';
+    Phase1._processScanResults();
+  },
+
+  _drawDetections(canvas, predictions) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#6B9080';
+    ctx.lineWidth = 2;
+    ctx.font = '14px sans-serif';
+    ctx.fillStyle = '#6B9080';
+    for (const p of predictions) {
+      const [x, y, w, h] = p.bbox;
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillText(`${p.class} (${(p.score * 100).toFixed(0)}%)`, x + 4, y > 18 ? y - 5 : y + h + 15);
+    }
+  },
+
+  _processScanResults() {
+    const dets = APP.spatialScan.detections;
+    const frames = APP.spatialScan.frameCount || 1;
+    const keys = Object.keys(dets);
+    if (!keys.length) {
+      document.getElementById('scanStatus').textContent = 'No objects detected. Try again.';
+      return;
+    }
+
+    const resultsEl = document.getElementById('scanResults');
+    const detsEl = document.getElementById('scanDetections');
+    resultsEl.style.display = 'block';
+
+    detsEl.innerHTML = keys.map(k => {
+      const avgPerFrame = (dets[k] / frames).toFixed(1);
+      return `<span class="scan-tag">${k} <span style="opacity:0.7">(~${avgPerFrame}/frame)</span></span>`;
+    }).join('');
+
+    // Estimate capacity from chair/couch/person detections
+    const chairLike = (dets['chair'] || 0) + (dets['couch'] || 0) + (dets['bench'] || 0);
+    const personCount = dets['person'] || 0;
+    const estimated = Math.max(Math.round(chairLike / frames) * 2, Math.round(personCount / frames));
+
+    if (estimated > 0) {
+      document.getElementById('scanStatus').textContent = `Estimated capacity: ~${estimated} people`;
+      APP.spatialScan.estimatedCapacity = estimated;
+    } else {
+      document.getElementById('scanStatus').textContent = 'Scan complete. Could not estimate capacity.';
+      document.getElementById('btnApplyScan').style.display = 'none';
+    }
+  },
+
+  applyScanResults() {
+    if (APP.spatialScan.estimatedCapacity) {
+      document.getElementById('peopleCount').value = APP.spatialScan.estimatedCapacity;
+      Phase1.readConfig();
+    }
+  },
+
+  init() {
+    document.querySelectorAll('#phase-1 input, #phase-1 select').forEach(el => {
+      el.addEventListener('input', Phase1.readConfig);
+      el.addEventListener('change', Phase1.readConfig);
+    });
+  }
+};
+
+// ================================================================
+//  Phase2 — Power Calculation
+// ================================================================
+const Phase2 = {
+  calculatePower() {
+    const { duration } = APP.config;
+    const breakdown = [];
+    let totalWatts = 0;
+    for (const m of APP.selectedModules) {
+      if (m.watts > 0) {
+        const w = m.watts * m.qty;
+        totalWatts += w;
+        breakdown.push({ name: m.name, watts: m.watts, qty: m.qty, totalW: w, color: m.color });
+      }
+    }
+    const totalWh = totalWatts * duration;
+    const hasSolar = APP.selectedModules.some(m => m.key === 'solar_panel');
+    const solarCount = hasSolar ? (APP.selectedModules.find(m => m.key === 'solar_panel')?.qty || 0) : 0;
+    const solarOffsetWh = solarCount * 80 * duration;
+    const netWh = Math.max(0, totalWh - solarOffsetWh);
+    let batteryType, batteryCount;
+    if (netWh > 400) {
+      batteryType = 'large_battery';
+      batteryCount = Math.max(1, Math.ceil(netWh / 2000));
+    } else {
+      batteryType = 'small_battery';
+      batteryCount = Math.max(1, Math.ceil(netWh / 500));
+    }
+    APP.power = { totalWatts, totalWh, netWh, solarOffsetWh, batteryType, batteryCount, breakdown };
+    Phase2.renderPower();
+  },
+
+  renderPower() {
+    const p = APP.power;
+    const bat = MODULES[p.batteryType];
+    document.getElementById('powerGrid').innerHTML = `
+      <div class="card" style="text-align:center"><div class="stat-value">${p.totalWatts}W</div><div class="stat-label">Total Power Draw</div></div>
+      <div class="card" style="text-align:center"><div class="stat-value">${p.totalWh.toFixed(0)} Wh</div><div class="stat-label">Total Consumption</div></div>
+      <div class="card" style="text-align:center"><div class="stat-value" style="color:${p.solarOffsetWh > 0 ? 'var(--success)' : 'var(--text-secondary)'}">${p.solarOffsetWh > 0 ? '-' + p.solarOffsetWh.toFixed(0) : '0'} Wh</div><div class="stat-label">Solar Offset</div></div>
+      <div class="card" style="text-align:center"><div class="stat-value">${p.netWh.toFixed(0)} Wh</div><div class="stat-label">Net Consumption</div></div>
+      <div class="card" style="text-align:center"><div class="stat-value" style="font-size:1.3rem">${bat.name}</div><div class="stat-label">&times;${p.batteryCount} required</div></div>
+    `;
+    const maxW = Math.max(...p.breakdown.map(b => b.totalW), 1);
+    document.getElementById('powerBreakdown').innerHTML = p.breakdown.map(b => `
+      <div class="power-row"><span>${b.name} <span style="color:var(--text-secondary)">&times;${b.qty}</span></span><span style="font-weight:600">${b.totalW}W</span></div>
+      <div class="power-bar-container"><div class="power-bar" style="width:${(b.totalW / maxW * 100).toFixed(1)}%;background:${b.color}"></div></div>
+    `).join('') || '<p style="color:var(--text-secondary)">No active power consumers.</p>';
+  }
+};
+
+// ================================================================
+//  Phase3 — Three.js 3D Layout + GLB Loading
+// ================================================================
+const Phase3 = {
+  initThreeScene() {
+    const container = document.getElementById('three-container');
+    const w = container.clientWidth, h = container.clientHeight;
+    const vw = APP.config.venueWidth, vl = APP.config.venueLength;
+
+    container.querySelectorAll('canvas').forEach(c => c.remove());
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1f2e);
+
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 200);
+    camera.position.set(vw * 0.8, Math.max(vw, vl) * 0.9, vl * 1.1);
+    camera.lookAt(vw / 2, 0, vl / 2);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(w, h);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.insertBefore(renderer.domElement, container.firstChild);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.target.set(vw / 2, 0.3, vl / 2);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.update();
+
+    scene.add(new THREE.AmbientLight(0x3a3a50, 0.7));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+    dirLight.position.set(vw, vw, vl * 0.5);
+    scene.add(dirLight);
+
+    const grid = new THREE.GridHelper(Math.max(vw, vl) * 1.5, Math.ceil(Math.max(vw, vl) * 1.5), 0x2a3040, 0x1f2535);
+    grid.position.set(vw / 2, 0, vl / 2);
+    scene.add(grid);
+
+    const boundaryGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0.01, 0), new THREE.Vector3(vw, 0.01, 0),
+      new THREE.Vector3(vw, 0.01, vl), new THREE.Vector3(0, 0.01, vl),
+      new THREE.Vector3(0, 0.01, 0)
+    ]);
+    scene.add(new THREE.Line(boundaryGeo, new THREE.LineBasicMaterial({ color: 0x6B9080, linewidth: 2 })));
+
+    const floorGeo = new THREE.PlaneGeometry(vw, vl);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x1a1f2e, transparent: true, opacity: 0.5 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(vw / 2, 0, vl / 2);
+    scene.add(floor);
+
+    Phase3.placeModules(scene, vw, vl);
+
+    function animate() {
+      APP.three.animId = requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    APP.three = { renderer, scene, camera, controls, animId: APP.three.animId };
+
+    const onResize = () => {
+      const nw = container.clientWidth, nh = container.clientHeight;
+      camera.aspect = nw / nh;
+      camera.updateProjectionMatrix();
+      renderer.setSize(nw, nh);
+    };
+    window.addEventListener('resize', onResize);
+    APP.three._onResize = onResize;
+
+    Phase3.renderLegend();
+  },
+
+  placeModules(scene, vw, vl) {
+    const tableW = 1.2, tableD = 0.8, walkway = 0.9;
+    const cellW = tableW + walkway, cellD = tableD + walkway;
+    const cols = Math.max(1, Math.floor(vw / cellW));
+    const rows = Math.max(1, Math.floor(vl / cellD));
+    const tableCount = APP.selectedModules.find(m => m.key === 'base_table')?.qty || 1;
+    const offsetX = (vw - cols * cellW + walkway) / 2;
+    const offsetZ = (vl - rows * cellD + walkway) / 2;
+
+    // Compute positions
+    const positions = [];
+    for (let r = 0; r < rows && positions.length < tableCount; r++) {
+      for (let c = 0; c < cols && positions.length < tableCount; c++) {
+        positions.push({
+          cx: offsetX + c * cellW + tableW / 2,
+          cz: offsetZ + r * cellD + tableD / 2
+        });
+      }
+    }
+
+    // Try loading GLB model, fallback to box
+    const loader = new THREE.GLTFLoader();
+    loader.load('./DESK-out-.glb',
+      (gltf) => {
+        // GLB loaded — auto-scale and clone
+        const template = gltf.scene;
+        const box = new THREE.Box3().setFromObject(template);
+        const size = box.getSize(new THREE.Vector3());
+        const scaleX = tableW / size.x;
+        const scaleZ = tableD / size.z;
+        const s = Math.min(scaleX, scaleZ);
+        template.scale.set(s, s, s);
+        // Recompute bounding box after scale
+        const box2 = new THREE.Box3().setFromObject(template);
+        const floorOffset = -box2.min.y;
+        const tableTopY = box2.max.y + floorOffset;
+
+        for (const pos of positions) {
+          const clone = template.clone();
+          clone.position.set(pos.cx, floorOffset, pos.cz);
+          scene.add(clone);
+          Phase3._placeAccessories(scene, pos.cx, pos.cz, tableTopY);
+        }
+        console.log('GLB model loaded successfully');
+      },
+      undefined,
+      (err) => {
+        // Fallback: use box geometry
+        console.warn('GLB not found, using fallback boxes:', err.message || err);
+        for (const pos of positions) {
+          Phase3.addModuleBox(scene, pos.cx, 0.375, pos.cz, tableW, 0.75, tableD, MODULES.base_table.threeColor);
+          Phase3._placeAccessories(scene, pos.cx, pos.cz, 0.75);
+        }
+      }
+    );
+
+    // Dimension labels (synchronous)
+    Phase3.addLabel(scene, `${vw}m`, vw / 2, 0, -0.4);
+    Phase3.addLabel(scene, `${vl}m`, -0.5, 0, vl / 2);
+  },
+
+  _placeAccessories(scene, cx, cz, tableTopY) {
+    let stackY = tableTopY;
+    for (const m of APP.selectedModules) {
+      if (m.key === 'base_table') continue;
+      if (m.key === 'privacy_screen') {
+        Phase3.addModuleBox(scene, cx, m.h / 2, cz - 0.4 - 0.05, m.w, m.h, m.d, m.threeColor);
+        continue;
+      }
+      if (m.key === 'solar_panel') {
+        Phase3.addModuleBox(scene, cx, stackY + m.h / 2 + 0.5, cz, m.w, m.h, m.d, m.threeColor);
+        continue;
+      }
+      Phase3.addModuleBox(scene, cx + (Math.random() - 0.5) * 0.3, stackY + m.h / 2, cz + (Math.random() - 0.5) * 0.2, m.w, m.h, m.d, m.threeColor);
+      stackY += m.h + 0.02;
+    }
+  },
+
+  addModuleBox(scene, x, y, z, w, h, d, color) {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const mat = new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.85 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    scene.add(mesh);
+    const edges = new THREE.EdgesGeometry(geo);
+    const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.15 }));
+    line.position.copy(mesh.position);
+    scene.add(line);
+  },
+
+  addLabel(scene, text, x, y, z) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128; canvas.height = 48;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#6B9080';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, 64, 34);
+    const tex = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(1.2, 0.45, 1);
+    sprite.position.set(x, y + 0.15, z);
+    scene.add(sprite);
+  },
+
+  renderLegend() {
+    document.getElementById('threeLegend').innerHTML = APP.selectedModules.map(m =>
+      `<div class="legend-item"><div class="legend-color" style="background:${m.color}"></div>${m.name}</div>`
+    ).join('');
+  },
+
+  cleanupThree() {
+    if (APP.three.animId) cancelAnimationFrame(APP.three.animId);
+    if (APP.three._onResize) window.removeEventListener('resize', APP.three._onResize);
+    if (APP.three.renderer) {
+      APP.three.renderer.dispose();
+      APP.three.renderer.domElement.remove();
+    }
+    APP.three = { renderer: null, scene: null, camera: null, controls: null, animId: null };
+  }
+};
+
+// ================================================================
+//  Phase4 — IoT Monitoring, Gauges, Chart, Serial, Simulation
+// ================================================================
+const Phase4 = {
+  GAUGE_CIRCUMFERENCE: 235.6,
+
+  updateGauge(id, cardId, value, min, max) {
+    const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
+    const offset = Phase4.GAUGE_CIRCUMFERENCE * (1 - pct);
+    const el = document.getElementById(id);
+    el.style.strokeDashoffset = offset;
+    let color = 'var(--accent)';
+    const card = document.getElementById(cardId);
+    card.classList.remove('warning', 'danger');
+    if (id === 'gaugeCO2') {
+      if (value > 1000) { color = 'var(--danger)'; card.classList.add('danger'); }
+      else if (value > 800) { color = 'var(--warning)'; card.classList.add('warning'); }
+    } else if (id === 'gaugeTemp') {
+      if (value > 35) { color = 'var(--danger)'; card.classList.add('danger'); }
+      else if (value > 30) { color = 'var(--warning)'; card.classList.add('warning'); }
+    } else if (id === 'gaugePM25') {
+      if (value > 75) { color = 'var(--danger)'; card.classList.add('danger'); }
+      else if (value > 35) { color = 'var(--warning)'; card.classList.add('warning'); }
+    }
+    el.style.stroke = color;
+  },
+
+  updateReadings(co2, temp, pm25) {
+    Phase4.updateGauge('gaugeCO2', 'gaugeCO2Card', co2, 300, 2000);
+    Phase4.updateGauge('gaugeTemp', 'gaugeTempCard', temp, 10, 50);
+    Phase4.updateGauge('gaugePM25', 'gaugePM25Card', pm25, 0, 150);
+
+    document.getElementById('valCO2').innerHTML = `${Math.round(co2)}<span class="gauge-unit"> ppm</span>`;
+    document.getElementById('valTemp').innerHTML = `${temp.toFixed(1)}<span class="gauge-unit"> \u00b0C</span>`;
+    document.getElementById('valPM25').innerHTML = `${Math.round(pm25)}<span class="gauge-unit"> \u00b5g/m\u00b3</span>`;
+
+    // Alert logic
+    const alertBar = document.getElementById('alertBar');
+    if (co2 > 1000) {
+      alertBar.className = 'alert-bar show danger-alert';
+      alertBar.innerHTML = '\u26a0 EMERGENCY: CO2 > 1000ppm \u2014 Purge mode activated (Fan 100%). Open windows immediately!';
+      Phase4.setFanSpeed(100);
+    } else if (co2 > 800) {
+      alertBar.className = 'alert-bar show warning-alert';
+      alertBar.innerHTML = '\u26a0 WARNING: CO2 > 800ppm \u2014 Increasing fan speed to 75%.';
+      Phase4.setFanSpeed(75);
+    } else {
+      alertBar.className = 'alert-bar';
+      Phase4.setFanSpeed(30);
+    }
+
+    // Record history
+    APP.monitoring.history.co2.push(co2);
+    APP.monitoring.history.temp.push(temp);
+    APP.monitoring.history.pm25.push(pm25);
+    APP.monitoring.history.timestamps.push(Date.now());
+
+    // Update chart
+    Phase4.renderChart();
+  },
+
+  setFanSpeed(pct) {
+    APP.monitoring.fanSpeed = pct;
+    document.getElementById('fanSpeedFill').style.width = pct + '%';
+    document.getElementById('fanSpeedLabel').textContent = pct + '%';
+    const fill = document.getElementById('fanSpeedFill');
+    if (pct >= 100) fill.style.background = 'var(--danger)';
+    else if (pct >= 75) fill.style.background = 'var(--warning)';
+    else fill.style.background = 'var(--accent)';
+  },
+
+  setLightingBrightness(pct) {
+    APP.monitoring.lightingBrightness = parseInt(pct);
+    document.getElementById('lightingPctLabel').textContent = pct + '%';
+    document.getElementById('lightingWattLabel').textContent = `(${(25 * pct / 100).toFixed(1)}W)`;
+  },
+
+  // --- Simulation ---
+  toggleSimulation() {
+    if (APP.monitoring.mode === 'sim') {
+      Phase4.stopAllMonitoring();
+      return;
+    }
+    Phase4.stopAllMonitoring();
+    APP.monitoring.mode = 'sim';
+    APP.monitoring.active = true;
+    APP.monitoring.startTime = Date.now();
+    document.getElementById('btnSim').innerHTML = '\u23f9 Stop Simulation';
+    document.getElementById('btnSim').classList.add('btn-danger');
+    document.getElementById('btnSim').classList.remove('btn-secondary');
+
+    const people = APP.config.peopleCount || 20;
+    APP.monitoring.simInterval = setInterval(() => {
+      const elapsed = (Date.now() - APP.monitoring.startTime) / 1000;
+      const fanMultiplier = APP.monitoring.fanSpeed >= 100 ? 0.4 : APP.monitoring.fanSpeed >= 75 ? 0.65 : 1.0;
+      const co2 = 400 + (people * 8) * Math.log(1 + elapsed / 300) * fanMultiplier + (Math.random() - 0.5) * 20;
+      const temp = 24 + 2 * Math.sin(elapsed / 600) + Math.random() * 0.5;
+      const pm25 = 10 + Math.random() * 15;
+      Phase4.updateReadings(Math.max(350, co2), temp, Math.max(1, pm25));
+    }, 2000);
+
+    Phase4.startTimer();
+  },
+
+  // --- Web Serial ---
+  async connectSerial() {
+    if (!('serial' in navigator)) {
+      alert('Web Serial API is not supported in this browser. Please use Chrome/Edge. Falling back to simulation.');
+      Phase4.toggleSimulation();
+      return;
+    }
+    try {
+      Phase4.stopAllMonitoring();
+      const port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+      APP.monitoring.serialPort = port;
+      APP.monitoring.mode = 'serial';
+      APP.monitoring.active = true;
+      APP.monitoring.startTime = Date.now();
+      document.getElementById('btnSerial').textContent = '\u2713 Connected';
+      document.getElementById('btnSerial').disabled = true;
+      Phase4.startTimer();
+
+      const decoder = new TextDecoderStream();
+      port.readable.pipeTo(decoder.writable);
+      const reader = decoder.readable.getReader();
+      APP.monitoring.serialReader = reader;
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          const parts = line.trim().split(',');
+          if (parts.length >= 2) {
+            const co2 = parseFloat(parts[0]) || 400;
+            const temp = parseFloat(parts[1]) || 24;
+            const pm25 = parts.length >= 3 ? (parseFloat(parts[2]) || 10) : 10;
+            Phase4.updateReadings(co2, temp, pm25);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Serial error:', err);
+      alert('Failed to connect: ' + err.message);
+    }
+  },
+
+  startTimer() {
+    clearInterval(APP.monitoring.timerInterval);
+    APP.monitoring.timerInterval = setInterval(() => {
+      if (!APP.monitoring.startTime) return;
+      const s = Math.floor((Date.now() - APP.monitoring.startTime) / 1000);
+      const hh = String(Math.floor(s / 3600)).padStart(2, '0');
+      const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+      const ss = String(s % 60).padStart(2, '0');
+      document.getElementById('elapsedTimer').textContent = `Elapsed: ${hh}:${mm}:${ss}`;
+    }, 1000);
+  },
+
+  stopAllMonitoring() {
+    if (APP.monitoring.simInterval) clearInterval(APP.monitoring.simInterval);
+    if (APP.monitoring.timerInterval) clearInterval(APP.monitoring.timerInterval);
+    if (APP.monitoring.serialReader) { try { APP.monitoring.serialReader.cancel(); } catch (e) {} }
+    if (APP.monitoring.serialPort) { try { APP.monitoring.serialPort.close(); } catch (e) {} }
+    APP.monitoring.simInterval = null;
+    APP.monitoring.active = false;
+    APP.monitoring.mode = null;
+    APP.monitoring.serialPort = null;
+    APP.monitoring.serialReader = null;
+    const btnSim = document.getElementById('btnSim');
+    btnSim.innerHTML = '\u25b6 Start Simulation';
+    btnSim.classList.remove('btn-danger');
+    btnSim.classList.add('btn-secondary');
+    const btnSerial = document.getElementById('btnSerial');
+    btnSerial.innerHTML = '\u26a1 Connect Arduino (SCD41)';
+    btnSerial.disabled = false;
+  },
+
+  endEvent() {
+    if (APP.monitoring.history.co2.length < 5) {
+      alert('Please collect at least 10 seconds of monitoring data first.');
+      return;
+    }
+    Phase4.stopAllMonitoring();
+    PhaseNav.goTo(5);
+  },
+
+  // --- Real-time Chart ---
+  renderChart() {
+    const canvas = document.getElementById('historyChart');
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    const W = rect.width, H = rect.height;
+    const pad = { top: 15, right: 15, bottom: 25, left: 50 };
+    const plotW = W - pad.left - pad.right;
+    const plotH = H - pad.top - pad.bottom;
+
+    // Clear
+    ctx.clearRect(0, 0, W, H);
+
+    const hist = APP.monitoring.history;
+    const maxPts = 60;
+    const co2Data = hist.co2.slice(-maxPts);
+    const tempData = hist.temp.slice(-maxPts);
+    const pm25Data = hist.pm25.slice(-maxPts);
+    const n = co2Data.length;
+    if (n < 2) return;
+
+    // Grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.top + (plotH / 4) * i;
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + plotW, y); ctx.stroke();
+    }
+
+    // Y-axis labels (CO2 scale)
+    ctx.fillStyle = '#9B9590';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    const co2Min = 300, co2Max = 2000;
+    for (let i = 0; i <= 4; i++) {
+      const val = co2Max - ((co2Max - co2Min) / 4) * i;
+      const y = pad.top + (plotH / 4) * i;
+      ctx.fillText(Math.round(val), pad.left - 6, y + 4);
+    }
+
+    // X-axis label
+    ctx.textAlign = 'center';
+    ctx.fillText('Time \u2192', pad.left + plotW / 2, H - 4);
+
+    // Draw line helper
+    function drawLine(data, min, max, color) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < data.length; i++) {
+        const x = pad.left + (i / (maxPts - 1)) * plotW;
+        const pct = Math.max(0, Math.min(1, (data[i] - min) / (max - min)));
+        const y = pad.top + plotH * (1 - pct);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    drawLine(co2Data, 300, 2000, '#6B9080');
+    drawLine(tempData, 10, 50, '#D4A76A');
+    drawLine(pm25Data, 0, 150, '#C17B7B');
+
+    // Update legend values
+    if (n > 0) {
+      document.getElementById('chartValCO2').textContent = Math.round(co2Data[n - 1]) + ' ppm';
+      document.getElementById('chartValTemp').textContent = tempData[n - 1].toFixed(1) + ' \u00b0C';
+      document.getElementById('chartValPM25').textContent = Math.round(pm25Data[n - 1]) + ' \u00b5g/m\u00b3';
+    }
+  }
+};
+
+// ================================================================
+//  Phase5 — ESG Report & PDF Export
+// ================================================================
+const Phase5 = {
+  generateReport() {
+    const hist = APP.monitoring.history;
+    const n = hist.co2.length;
+    if (n === 0) return;
+
+    const avgCO2 = hist.co2.reduce((a, b) => a + b, 0) / n;
+    const peakCO2 = Math.max(...hist.co2);
+    const avgTemp = hist.temp.reduce((a, b) => a + b, 0) / n;
+    const totalTimeMs = hist.timestamps[n - 1] - hist.timestamps[0];
+    const totalTimeMin = totalTimeMs / 60000;
+    const powerKwh = (APP.power.totalWatts * (totalTimeMs / 3600000)) / 1000;
+    const solarKwh = APP.config.duration > 0
+      ? (APP.power.solarOffsetWh * (totalTimeMs / 3600000) / APP.config.duration) / 1000
+      : 0;
+    const savedPct = APP.power.totalWh > 0 ? ((APP.power.solarOffsetWh / APP.power.totalWh) * 100) : 0;
+
+    document.getElementById('reportGrid').innerHTML = `
+      <div class="report-stat"><div class="stat-value" style="font-size:1.5rem">${totalTimeMin.toFixed(1)}<span class="gauge-unit"> min</span></div><div class="stat-label">Total Monitoring Time</div></div>
+      <div class="report-stat"><div class="stat-value" style="font-size:1.5rem">${avgCO2.toFixed(0)}<span class="gauge-unit"> ppm</span></div><div class="stat-label">Average CO2</div></div>
+      <div class="report-stat"><div class="stat-value" style="font-size:1.5rem;color:${peakCO2>1000?'var(--danger)':peakCO2>800?'var(--warning)':'var(--accent)'}">${peakCO2.toFixed(0)}<span class="gauge-unit"> ppm</span></div><div class="stat-label">Peak CO2</div></div>
+      <div class="report-stat"><div class="stat-value" style="font-size:1.5rem">${avgTemp.toFixed(1)}<span class="gauge-unit"> \u00b0C</span></div><div class="stat-label">Average Temperature</div></div>
+      <div class="report-stat"><div class="stat-value" style="font-size:1.5rem">${powerKwh.toFixed(3)}<span class="gauge-unit"> kWh</span></div><div class="stat-label">Power Consumed</div></div>
+      <div class="report-stat"><div class="stat-value" style="font-size:1.5rem;color:var(--success)">${solarKwh > 0 ? solarKwh.toFixed(3) : '0'}<span class="gauge-unit"> kWh</span></div><div class="stat-label">Solar Savings</div></div>
+    `;
+
+    // ESG Tags
+    const tags = [];
+    if (solarKwh > 0) tags.push({ text: `E: Renewable Energy \u2014 Solar offset ${savedPct.toFixed(0)}%`, cls: 'env' });
+    if (savedPct > 15) tags.push({ text: `E: Carbon Reduction ${savedPct.toFixed(0)}%`, cls: 'env' });
+    if (avgCO2 < 600) tags.push({ text: 'E: Excellent Air Quality (avg < 600ppm)', cls: 'env' });
+    else if (avgCO2 < 800) tags.push({ text: 'E: Good Air Quality (avg < 800ppm)', cls: 'env' });
+    else tags.push({ text: 'E: Air Quality Needs Improvement', cls: 'env' });
+    if (APP.selectedModules.some(m => m.key === 'smart_lighting')) {
+      const dimPct = APP.monitoring.lightingBrightness;
+      if (dimPct < 100) tags.push({ text: `E: Smart Lighting Dimmed to ${dimPct}% (Power Savings)`, cls: 'env' });
+    }
+
+    tags.push({ text: 'S: Smart IoT Monitored Event', cls: 'social' });
+    if (APP.config.eventType === 'elderly_dining') tags.push({ text: 'S: Community Elderly Care', cls: 'social' });
+    if (APP.config.eventType === 'health_clinic') tags.push({ text: 'S: Public Health Service', cls: 'social' });
+    if (APP.selectedModules.some(m => m.key === 'privacy_screen')) tags.push({ text: 'S: Health Privacy Compliant', cls: 'social' });
+    tags.push({ text: 'G: Modular Furniture Deployment', cls: 'gov' });
+    tags.push({ text: `G: ${APP.config.peopleCount} participants served`, cls: 'gov' });
+
+    document.getElementById('esgTags').innerHTML = tags.map(t => `<span class="esg-tag ${t.cls}">${t.text}</span>`).join('');
+  },
+
+  downloadPDF() {
+    const element = document.getElementById('phase-5');
+    html2pdf().set({
+      margin: [10, 10, 10, 10],
+      filename: 'FlowTable_ESG_Report.pdf',
+      image: { type: 'jpeg', quality: 0.95 },
+      html2canvas: { scale: 2, backgroundColor: '#1a1f2e', useCORS: true },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    }).from(element).save();
+  }
+};
+
+// ================================================================
+//  INIT
+// ================================================================
+Phase1.init();
+PhaseNav.updateUI();
+</script>
+</body>
+</html>
